@@ -1,14 +1,13 @@
 // RoBotAI Proxy Server
-// Made for Roblox games via HttpService
-// Uses Puter.js compatible endpoint — free, no key needed
-// Open source — MIT License
+// Free AI chat proxy for Roblox games via HttpService
+// Uses pollinations.ai
+// MIT License
 
 const http = require("http")
 const https = require("https")
 
 const PORT = process.env.PORT || 3000
 
-// Words we don't want the bot saying or this shit might get us banned 
 const BANNED_WORDS = [
     "shit", "fuck", "ass", "bitch", "damn", "hell", "crap",
     "bastard", "dick", "piss", "cunt", "fag", "slut", "whore"
@@ -17,7 +16,6 @@ const BANNED_WORDS = [
 function filterResponse(text) {
     let clean = text
     for (const word of BANNED_WORDS) {
-        // Replace with asterisks, case-insensitive
         const regex = new RegExp(`\\b${word}\\b`, "gi")
         clean = clean.replace(regex, "*".repeat(word.length))
     }
@@ -25,78 +23,48 @@ function filterResponse(text) {
 }
 
 function askAI(userMessage, callback) {
-    const body = JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-            {
-                role: "system",
-                content:
-                    "You are a friendly AI assistant inside a Roblox game. " +
-                    "Keep responses short (1-3 sentences), fun, and suitable for all ages. " +
-                    "Never swear, use slurs, or say anything inappropriate. " +
-                    "Be helpful and positive."
-            },
-            {
-                role: "user",
-                content: userMessage
-            }
-        ],
-        max_tokens: 150,
-        temperature: 0.8
-    })
+    const systemPrompt =
+        "You are a friendly AI assistant inside a Roblox game. " +
+        "Keep responses short (1-3 sentences), fun, and suitable for all ages. " +
+        "Never swear or say anything inappropriate. Be helpful and positive."
+
+    const fullPrompt = encodeURIComponent(systemPrompt + "\n\nUser: " + userMessage + "\nAssistant:")
 
     const options = {
-        hostname: "api.openai.com",
-        path: "/v1/chat/completions",
-        method: "POST",
+        hostname: "text.pollinations.ai",
+        path: "/" + fullPrompt,
+        method: "GET",
         headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.OPENAI_API_KEY || ""}`,
-            "Content-Length": Buffer.byteLength(body)
+            "User-Agent": "RoboChat/1.0"
         }
     }
 
-    // If no OpenAI key, fall back to a free proxy
-    const useProxy = !process.env.OPENAI_API_KEY
-    if (useProxy) {
-        options.hostname = "api.puter.com"
-        options.path = "/v2/ai/chat"
-        delete options.headers["Authorization"]
-    }
+    let raw = ""
 
     const req = https.request(options, (res) => {
-        let data = ""
-        res.on("data", (chunk) => { data += chunk })
+        res.setEncoding("utf8")
+        res.on("data", (chunk) => { raw += chunk })
         res.on("end", () => {
-            try {
-                const parsed = JSON.parse(data)
-                let reply = ""
-
-                if (useProxy) {
-                    reply = parsed?.message?.content || "I didn't catch that, try again!"
-                } else {
-                    reply = parsed?.choices?.[0]?.message?.content || "I didn't catch that, try again!"
-                }
-
-                callback(null, filterResponse(reply.trim()))
-            } catch (err) {
-                callback("Parse error: " + err.message)
+            const reply = raw.trim()
+            if (!reply || reply.length === 0) {
+                callback("Empty response from AI")
+                return
             }
+            callback(null, filterResponse(reply))
         })
     })
 
     req.on("error", (err) => callback("Request failed: " + err.message))
-    req.setTimeout(10000, () => {
+
+    req.setTimeout(15000, () => {
         req.destroy()
         callback("Request timed out")
     })
 
-    req.write(body)
     req.end()
 }
 
 const server = http.createServer((req, res) => {
-    // CORS headers so Roblox can talk to this
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
     res.setHeader("Access-Control-Allow-Headers", "Content-Type")
@@ -128,7 +96,7 @@ const server = http.createServer((req, res) => {
                 return
             }
 
-            const userMessage = parsed?.message?.toString().slice(0, 500)
+            const userMessage = parsed?.message?.toString().slice(0, 300)
 
             if (!userMessage || userMessage.trim().length === 0) {
                 res.writeHead(400, { "Content-Type": "application/json" })
@@ -136,7 +104,7 @@ const server = http.createServer((req, res) => {
                 return
             }
 
-            console.log(`[Chat] User asked: ${userMessage}`)
+            console.log(`[Chat] User: ${userMessage}`)
 
             askAI(userMessage, (err, reply) => {
                 if (err) {
@@ -146,7 +114,7 @@ const server = http.createServer((req, res) => {
                     return
                 }
 
-                console.log(`[Chat] AI replied: ${reply}`)
+                console.log(`[Chat] AI: ${reply}`)
                 res.writeHead(200, { "Content-Type": "application/json" })
                 res.end(JSON.stringify({ reply }))
             })
@@ -160,5 +128,4 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`RoboChat proxy running on port ${PORT}`)
-    console.log(`POST /chat — send { "message": "your message" }`)
 })
